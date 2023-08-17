@@ -8,7 +8,7 @@ from torch.optim import Optimizer  # , lr_scheduler
 
 import dill as pkl
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import os
 
