@@ -60,30 +60,24 @@ def optimizing_predictor(
     print("\nStarting to train Model")
     for epoch in range(epochs):
 
-        train_loss, train_rsme_loss = train_model(model, optimizer, train_loader, loss_function, epoch)
-        validation_loss, validation_rsme_loss = eval_model(model, validation_loader, loss_function)
+        train_loss = train_model(model, optimizer, train_loader, loss_function, epoch)
+        validation_loss = eval_model(model, validation_loader, loss_function)
 
         writer.add_scalar(tag="training/loss",
                           scalar_value=train_loss,
                           global_step=epoch)
-        writer.add_scalar(tag="training/rsme_loss",
-                          scalar_value=train_rsme_loss,
-                          global_step=epoch)
         writer.add_scalar(tag="validation/loss",
                           scalar_value=validation_loss,
                           global_step=epoch)
-        writer.add_scalar(tag="validation/rsme_loss",
-                          scalar_value=validation_rsme_loss,
-                          global_step=epoch)
 
         print(f"\nEpoch: {str(epoch + 1).zfill(len(str(epochs)))} (lr={lr:.6f} || "
-              f"Validation loss: {validation_loss:.4f} | {validation_rsme_loss:.4f} || "
-              f"Training loss: {train_loss:.4f} | {train_rsme_loss:.4f})")
+              f"Validation loss: {validation_loss:.4f} || "
+              f"Training loss: {train_loss:.4f}")
 
         # Either save the best model or adapt the learning rate if necessary.
         if adapt_lr_factor is not None:
-            if not best_loss or validation_rsme_loss < best_loss:
-                best_loss = validation_rsme_loss
+            if not best_loss or validation_loss < best_loss:
+                best_loss = validation_loss
                 torch.save(model, "best_model.pt")
                 print("Model saved to best_model.pt")
             else:
@@ -105,7 +99,7 @@ def eval_model(
         test_loader: DataLoader,
         loss_function: nn.Module,
         save_predictions: bool = False
-) -> Tuple[float, float]:
+) -> float:
     """Evaluates a given model on test data.
 
     Parameters
@@ -121,8 +115,8 @@ def eval_model(
 
     Returns
     -------
-    Tuple[float, float]
-        A tuple containing both the specified loss and RMSE.
+    float
+        Returns the specified loss.
     """
 
     # Turn on evaluation mode for the model.
@@ -130,7 +124,7 @@ def eval_model(
 
     target_device = get_target_device()
 
-    total_loss, total_rmse_loss = 0.0, 0.0
+    total_loss = 0.0
     num_samples = len(test_loader.dataset)
 
     predictions = []
@@ -149,14 +143,13 @@ def eval_model(
 
             # Compute total loss.
             total_loss += loss.item()
-            total_rmse_loss += torch.sqrt(loss).item()
 
         # Save predictions if save predictions.
         if save_predictions:
             with open("predictions.pkl", "wb") as f:
                 pkl.dump(predictions, f)
 
-    return total_loss / num_samples, total_rmse_loss / num_samples
+    return total_loss / num_samples
 
 
 def train_model(
@@ -165,7 +158,7 @@ def train_model(
         training_loader: DataLoader,
         loss_function: nn.Module,
         epoch: int
-) -> Tuple[float, float]:
+) -> float:
     """Trains a given model on the training data.
 
     Parameters
@@ -183,8 +176,8 @@ def train_model(
 
     Returns
     -------
-    Tuple[float, float]
-        A tuple containing both the specified loss and RMSE.
+    float
+        Returns the specified loss.
     """
 
     target_device = get_target_device()
@@ -193,7 +186,7 @@ def train_model(
     model.train()
     torch.enable_grad()
 
-    total_loss, total_rmse_loss = 0.0, 0.0
+    total_loss = 0.0
     num_samples = len(training_loader.dataset)
 
     lr = get_lr(optimizer)
@@ -219,9 +212,8 @@ def train_model(
 
         # Compute the total loss.
         total_loss += loss.item()
-        total_rmse_loss += torch.sqrt(loss).item()
 
-    return total_loss / num_samples, total_rmse_loss / num_samples
+    return total_loss / num_samples
 
 
 def get_lr(optimizer):
