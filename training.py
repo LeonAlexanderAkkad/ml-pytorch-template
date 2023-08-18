@@ -115,7 +115,7 @@ def optimizing_predictor(
 
     writer.close()
 
-    test_loss = eval_model(model, test_loader, loss_function)
+    test_loss = eval_model(model, test_loader, loss_function, save_predictions=True)
 
     print(f"\nFinal loss: {test_loss}")
     print("\nDone!")
@@ -217,8 +217,7 @@ def train_model(
 
     lr = get_lr(optimizer)
 
-    for data, target in tqdm(training_loader, desc=f"Training epoch {epoch + 1} "
-                                                   f"(lr={lr:.6f})"):
+    for data, target in tqdm(training_loader, desc=f"Training epoch {epoch + 1} ({lr = :.6f})"):
 
         data, target = data.float().to(target_device), target.long().to(target_device)
 
