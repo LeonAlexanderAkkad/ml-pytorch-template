@@ -1,3 +1,5 @@
+import numpy as np
+
 from tqdm import tqdm
 
 import torch
@@ -8,7 +10,7 @@ from torch.optim import Optimizer  # , lr_scheduler
 
 import dill as pkl
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import os
 
@@ -21,14 +23,16 @@ def optimizing_predictor(
         epochs: int,
         loss_function: nn.Module,
         optimizer: Optimizer,
-        adapt_lr_factor: Optional[float] = None
-):
+        target_directory: str,
+        adapt_lr_factor: Optional[float] = None,
+        early_stopping: bool = False
+) -> Tuple[list, list, float]:
     """Optimizes a given model for a number of epochs and saves the best model.
 
-    The function computes both the defined loss and the RMSE (Root mean squared error) between
-    the output of the model and the given target. Depending on the best RMSE on the validation data, the best
-    model is then saved to the specified file. Moreover, tensorboard is utilized in order to monitor the training
-    process. Finally, a scheduling of the learning rate is implemented as well.
+    The function computes both the defined loss between the output of the model and the given target.
+    Depending on the best loss on the validation data, the best model is then saved to the specified file.
+    Moreover, tensorboard is utilized in order to monitor the training process.
+    Finally, a scheduling of the learning rate is implemented as well.
 
     Parameters
     ----------
@@ -46,27 +50,37 @@ def optimizing_predictor(
         Loss function used to compute the loss between the output of the model and the target.
     optimizer: Optimizer
         Specified optimizer to be used to optimize the model.
-    adapt_lr_factor: Optional[float] = None
+    target_directory: str
+        Path to the directory where the results and best model should be stored.
+    adapt_lr_factor: float = None
         Factor used to adapt the learning rate if the model starts to over-fit on the training data.
+    early_stopping: bool = False
+        Bool used to specify if early stopping should be applied.
 
     Returns
     -------
-    None
+    Tuple[list, list, float]
+        A tuple containing all train and validation losses as well as the final test loss.
     """
 
     best_loss = 0
     lr = get_lr(optimizer)
-    writer = SummaryWriter(log_dir=os.path.join("results", "experiment_04"))
+    writer = SummaryWriter(log_dir=target_directory)
+    train_losses = []
+    validation_losses = []
     print("\nStarting to train Model")
     for epoch in range(epochs):
 
         train_loss = train_model(model, optimizer, train_loader, loss_function, epoch)
         validation_loss = eval_model(model, validation_loader, loss_function)
 
-        writer.add_scalar(tag="training/loss",
+        train_losses.append(train_loss)
+        validation_losses.append(validation_loss)
+
+        writer.add_scalar(tag="Loss/train",
                           scalar_value=train_loss,
                           global_step=epoch)
-        writer.add_scalar(tag="validation/loss",
+        writer.add_scalar(tag="Loss/test",
                           scalar_value=validation_loss,
                           global_step=epoch)
 
@@ -74,24 +88,39 @@ def optimizing_predictor(
               f"Validation loss: {validation_loss:.4f} || "
               f"Training loss: {train_loss:.4f}")
 
+        # Check for early stopping.
+        if early_stopping:
+            if np.argmin(validation_losses) <= epoch - 5:
+                print(f"\nEarly stopping on epoch {epoch}!")
+                test_loss = eval_model(model, test_loader, loss_function)
+                writer.close()
+                print(f"\nFinal loss: {test_loss}")
+                print("\nDone!")
+
+                return train_losses, validation_losses, test_loss
+
         # Either save the best model or adapt the learning rate if necessary.
         if adapt_lr_factor is not None:
             if not best_loss or validation_loss < best_loss:
                 best_loss = validation_loss
-                torch.save(model, "best_model.pt")
-                print("Model saved to best_model.pt")
+                torch.save(model, os.path.join(target_directory, "best_model.pt"))
+                print("\nModel saved to best_model.pt")
             else:
                 lr /= adapt_lr_factor
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
-                print(f"New learning rate: {lr:.6f}")
+                print(f"\nNew learning rate: {lr:.6f}")
 
-        print(100 * "=" + "\n")
+        print("\n" + 100 * "=")
+
+    writer.close()
 
     test_loss = eval_model(model, test_loader, loss_function)
 
     print(f"\nFinal loss: {test_loss}")
     print("\nDone!")
+
+    return train_losses, validation_losses, test_loss
 
 
 def eval_model(
@@ -119,14 +148,12 @@ def eval_model(
         Returns the specified loss.
     """
 
+    target_device = get_target_device()
+
     # Turn on evaluation mode for the model.
     model.eval()
 
-    target_device = get_target_device()
-
-    total_loss = 0.0
-    num_samples = len(test_loader.dataset)
-
+    total_loss = []
     predictions = []
 
     # Compute the loss with torch.no_grad() as gradients aren't used.
@@ -142,14 +169,14 @@ def eval_model(
             loss = loss_function(outputs, target)
 
             # Compute total loss.
-            total_loss += loss.item()
+            total_loss.append(loss.item())
 
         # Save predictions if save predictions.
         if save_predictions:
             with open("predictions.pkl", "wb") as f:
                 pkl.dump(predictions, f)
 
-    return total_loss / num_samples
+    return np.mean(np.array(total_loss)).item()
 
 
 def train_model(
@@ -186,8 +213,7 @@ def train_model(
     model.train()
     torch.enable_grad()
 
-    total_loss = 0.0
-    num_samples = len(training_loader.dataset)
+    total_loss = []
 
     lr = get_lr(optimizer)
 
@@ -211,9 +237,9 @@ def train_model(
         optimizer.zero_grad()
 
         # Compute the total loss.
-        total_loss += loss.item()
+        total_loss.append(loss.item())
 
-    return total_loss / num_samples
+    return np.mean(np.array(total_loss)).item()
 
 
 def get_lr(optimizer):
