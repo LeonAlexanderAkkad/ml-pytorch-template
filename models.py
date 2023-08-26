@@ -101,7 +101,6 @@ class SimpleRNN(nn.Module):
         out, _ = self.rnn(x, h0)
         # in this case we only use the last hidden state for the fully connected layer
         out = self.fc(out[:, -1, :])
-
         return out
 
 
@@ -133,5 +132,4 @@ class SimpleLSTM(nn.Module):
         out, _ = self.rnn(x, (h0, c0))
         # in this case we only use the last hidden state for the fully connected layer
         out = self.fc(out[:, -1, :])
-
         return out
