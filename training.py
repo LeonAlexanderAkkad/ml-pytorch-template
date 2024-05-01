@@ -9,8 +9,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 
-import dill as pkl
-
 from typing import Optional, Tuple
 
 import os
