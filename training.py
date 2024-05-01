@@ -91,7 +91,7 @@ def optimizing_predictor(
                 print(f"\nFinal loss: {test_loss}")
                 print("\nDone!")
 
-                return train_losses, validation_losses, test_loss
+                return np.mean(np.array(train_losses)).item(), np.mean(np.array(validation_losses)).item(), test_loss
 
         # Either save the best model or adapt the learning rate if necessary.
         if adapt_lr_factor is not None:
