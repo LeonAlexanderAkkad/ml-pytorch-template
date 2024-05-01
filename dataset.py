@@ -1,4 +1,5 @@
 import os
+from abc import ABC, abstractmethod
 
 from glob import glob
 
@@ -8,18 +9,17 @@ from torch.utils.data import Dataset, Subset
 from torchvision import transforms
 
 
-class TrainingDataset(Dataset):
-    """Simple dataset used for training."""
+class AbstractTrainingDataset(Dataset, ABC):
+    """Simple abstract dataset used for training."""
 
     def __init__(self, data_dir: str, targets_dir: str, transform: transforms.Compose | None = None):
         """Sort and store all files found in given directory."""
-        self.files = sorted(os.path.abspath(f) for f in glob(os.path.join(data_dir, "**", "*"), recursive=True))
-        self.targets = np.genfromtxt(targets_dir, delimiter=",", dtype=int, filling_values=-1)
+        self.data, self.targets = self.get_data(data_dir, targets_dir)
         self.transform = transform
 
     def __getitem__(self, index: int):
         """Returns file given an index."""
-        sample = self.files[index]
+        sample = self.data[index]
         target = self.targets[index]
 
         if self.transform is not None:
@@ -34,3 +34,7 @@ class TrainingDataset(Dataset):
     def split(self, train_idx, val_idx, test_idx):
         """Splits the dataset into three subsets given the indices."""
         return Subset(self, train_idx), Subset(self, val_idx), Subset(self, test_idx)
+
+    @abstractmethod
+    def get_data(self, data_dir: str, targets_dir: str):
+        pass

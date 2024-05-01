@@ -2,11 +2,12 @@ import numpy as np
 
 from tqdm import tqdm
 
+import wandb as wb
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from torch.optim import Optimizer  # , lr_scheduler
+from torch.optim import Optimizer
 
 import dill as pkl
 
@@ -26,7 +27,7 @@ def optimizing_predictor(
         target_directory: str,
         adapt_lr_factor: Optional[float] = None,
         early_stopping: bool = False
-) -> Tuple[list, list, float]:
+) -> Tuple[float, float, float]:
     """Optimizes a given model for a number of epochs and saves the best model.
 
     The function computes both the defined loss between the output of the model and the given target.
@@ -59,13 +60,12 @@ def optimizing_predictor(
 
     Returns
     -------
-    Tuple[list, list, float]
-        A tuple containing all train and validation losses as well as the final test loss.
+    Tuple[float, float, float]
+        A tuple containing the average train and validation loss as well as the final test loss.
     """
 
     best_loss = 0
     lr = get_lr(optimizer)
-    writer = SummaryWriter(log_dir=target_directory)
     train_losses = []
     validation_losses = []
     print("\nStarting to train Model")
@@ -77,12 +77,7 @@ def optimizing_predictor(
         train_losses.append(train_loss)
         validation_losses.append(validation_loss)
 
-        writer.add_scalar(tag="Loss/train",
-                          scalar_value=train_loss,
-                          global_step=epoch)
-        writer.add_scalar(tag="Loss/test",
-                          scalar_value=validation_loss,
-                          global_step=epoch)
+        wb.log({"train loss": train_loss, "val loss": validation_loss})
 
         print(f"\nEpoch: {str(epoch + 1).zfill(len(str(epochs)))} (lr={lr:.6f} || "
               f"Validation loss: {validation_loss:.4f} || "
@@ -93,7 +88,6 @@ def optimizing_predictor(
             if np.argmin(validation_losses) <= epoch - 5:
                 print(f"\nEarly stopping on epoch {epoch}!")
                 test_loss = eval_model(model, test_loader, loss_function)
-                writer.close()
                 print(f"\nFinal loss: {test_loss}")
                 print("\nDone!")
 
@@ -113,14 +107,12 @@ def optimizing_predictor(
 
         print("\n" + 100 * "=")
 
-    writer.close()
-
     test_loss = eval_model(model, test_loader, loss_function, save_predictions=True)
 
     print(f"\nFinal loss: {test_loss}")
     print("\nDone!")
 
-    return train_losses, validation_losses, test_loss
+    return np.mean(np.array(train_losses)).item(), np.mean(np.array(validation_losses)).item(), test_loss
 
 
 def eval_model(
@@ -168,13 +160,15 @@ def eval_model(
             # Compute the loss.
             loss = loss_function(outputs, target)
 
+            # log batch loss
+            wb.log({"val/test batch loss"})
+
             # Compute total loss.
             total_loss.append(loss.item())
 
         # Save predictions if save predictions.
         if save_predictions:
-            with open("predictions.pkl", "wb") as f:
-                pkl.dump(predictions, f)
+            wb.log({"predictions": predictions})
 
     return np.mean(np.array(total_loss)).item()
 
@@ -218,7 +212,6 @@ def train_model(
     lr = get_lr(optimizer)
 
     for data, target in tqdm(training_loader, desc=f"Training epoch {epoch + 1} ({lr = :.6f})"):
-
         data, target = data.float().to(target_device), target.long().to(target_device)
 
         outputs = model(data)
