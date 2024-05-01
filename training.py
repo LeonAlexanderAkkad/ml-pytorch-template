@@ -161,7 +161,7 @@ def eval_model(
             loss = loss_function(outputs, target)
 
             # log batch loss
-            wb.log({"val/test batch loss"})
+            wb.log({"val/test batch loss": loss.item()})
 
             # Compute total loss.
             total_loss.append(loss.item())
@@ -227,6 +227,9 @@ def train_model(
 
         # Reset the accumulated gradients.
         optimizer.zero_grad()
+
+        # log batch loss
+        wb.log({"train batch loss": loss.item()})
 
         # Compute the total loss.
         total_loss.append(loss.item())
