@@ -1,15 +1,10 @@
-import os
 from abc import ABC, abstractmethod
-
-from glob import glob
-
-import numpy as np
 
 from torch.utils.data import Dataset, Subset
 from torchvision import transforms
 
 
-class AbstractTrainingDataset(Dataset, ABC):
+class TrainingDataset(Dataset, ABC):
     """Simple abstract dataset used for training."""
 
     def __init__(self, data_dir: str, targets_dir: str, transform: transforms.Compose | None = None):
@@ -29,7 +24,7 @@ class AbstractTrainingDataset(Dataset, ABC):
 
     def __len__(self):
         """Returns the number of files in the dataset."""
-        return len(self.targets)
+        return len(self.data)
 
     def split(self, train_idx, val_idx, test_idx):
         """Splits the dataset into three subsets given the indices."""

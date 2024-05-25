@@ -1,3 +1,6 @@
+import random
+import time
+
 import numpy as np
 
 from tqdm import tqdm
@@ -11,236 +14,297 @@ from torch.optim import Optimizer
 
 from typing import Optional, Tuple
 
+from abc import ABC, abstractmethod
+
+from dataset import Dataset
+
 import os
 
 
-def optimizing_predictor(
-        train_loader: DataLoader,
-        validation_loader: DataLoader,
-        test_loader: DataLoader,
-        model: nn.Module,
-        epochs: int,
-        loss_function: nn.Module,
-        optimizer: Optimizer,
-        target_directory: str,
-        adapt_lr_factor: Optional[float] = None,
+class Trainer(ABC):
+    def __init__(
+            self,
+            dataset: Dataset,
+            train_loader: DataLoader,
+            val_loader: DataLoader,
+            test_loader: DataLoader,
+            model: nn.Module,
+            optimizer: Optimizer,
+            loss_fun: nn.Module,
+            epochs: int
+    ):
+        self.dataset = dataset
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.test_loader = test_loader
+        self.model = model
+        self.optimizer = optimizer
+        self.loss_fun = loss_fun
+        self._lr = Trainer.get_lr(self.optimizer)
+        self._epochs = epochs
+        self._device = Trainer.get_target_device()
+        self._global_train_step = 0
+        self._global_val_step = 0
+        self._global_test_step = 0
+        self._current_epoch = 0
+
+    @property
+    def epochs(self):
+        return self._epochs
+
+    @epochs.setter
+    def epochs(self, new_epoch):
+        if isinstance(new_epoch, int) and new_epoch > 0:
+            self._epochs = new_epoch
+            return
+
+        print("Please enter a valid epoch")
+
+    def optimizing_predictor(
+            self,
+            target_directory: str,
+            adapt_lr_factor: Optional[float] = None,
+            early_stopping: bool = False
+    ) -> Tuple[float, float, float, float, float, float]:
+        """Optimizes a given model for a number of epochs and saves the best model.
+
+        The function computes both the defined loss and the accuracy between the output of the model and the given target.
+        Depending on the best loss on the validation data, the best model is then saved to the specified file.
+        Moreover, wandb is utilized in order to monitor the training process.
+        Finally, a scheduling of the learning rate is implemented as well.
+
+        Parameters
+        ----------
+        target_directory: str
+            Path to the directory where the results and best model should be stored.
+        adapt_lr_factor: float = None
+            Factor used to adapt the learning rate if the model starts to over-fit on the training data.
         early_stopping: bool = False
-) -> Tuple[float, float, float]:
-    """Optimizes a given model for a number of epochs and saves the best model.
+            Bool used to specify if early stopping should be applied.
 
-    The function computes both the defined loss between the output of the model and the given target.
-    Depending on the best loss on the validation data, the best model is then saved to the specified file.
-    Moreover, tensorboard is utilized in order to monitor the training process.
-    Finally, a scheduling of the learning rate is implemented as well.
+        Returns
+        -------
+        Tuple[float, float, float, float, float, float]
+            A tuple containing the average train and validation loss/accuracy as well as the final test loss/accuracy.
+        """
 
-    Parameters
-    ----------
-    train_loader: DataLoader
-        Data for training the model.
-    validation_loader: DataLoader
-        Data for monitoring validation loss.
-    test_loader: DataLoader
-        Data for checking how well the model works on unseen data.
-    model: nn.Module
-        Model to be trained.
-    epochs: int
-        Number of epochs to train the model for.
-    loss_function: nn.Module
-        Loss function used to compute the loss between the output of the model and the target.
-    optimizer: Optimizer
-        Specified optimizer to be used to optimize the model.
-    target_directory: str
-        Path to the directory where the results and best model should be stored.
-    adapt_lr_factor: float = None
-        Factor used to adapt the learning rate if the model starts to over-fit on the training data.
-    early_stopping: bool = False
-        Bool used to specify if early stopping should be applied.
+        best_loss = 0
+        # Tell wandb to watch the model.
+        wb.watch(self.model, criterion=self.loss_fun, log="all", log_freq=10)
+        train_losses = []
+        train_accuracies = []
+        validation_losses = []
+        validation_accuracies = []
+        print("\nStarting to train Model")
+        for epoch in range(self.epochs):
 
-    Returns
-    -------
-    Tuple[float, float, float]
-        A tuple containing the average train and validation loss as well as the final test loss.
-    """
+            train_loss, train_acc = self.train_model()
+            val_loss, val_acc = self.eval_model()
 
-    best_loss = 0
-    lr = get_lr(optimizer)
-    train_losses = []
-    validation_losses = []
-    print("\nStarting to train Model")
-    for epoch in range(epochs):
+            train_losses.append(train_loss)
+            train_accuracies.append(train_acc)
+            validation_losses.append(val_loss)
+            validation_accuracies.append(val_acc)
 
-        train_loss = train_model(model, optimizer, train_loader, loss_function, epoch)
-        validation_loss = eval_model(model, validation_loader, loss_function)
+            wb.log(
+                {"train/loss": train_loss, "train/accuracy": train_acc, "val/loss": val_loss, "val/accuracy": val_acc,
+                 "epoch": epoch})
 
-        train_losses.append(train_loss)
-        validation_losses.append(validation_loss)
+            print(f"\nEpoch: {str(epoch + 1).zfill(len(str(self.epochs)))} (lr={self._lr:.6f}) || "
+                  f"Validation loss: {val_loss:.4f} || "
+                  f"Validation accuracy: {val_acc:.4f} || "
+                  f"Training loss: {train_loss:.4f} || "
+                  f"Training accuracy: {train_acc}")
 
-        wb.log({"train loss": train_loss, "val loss": validation_loss})
+            # Check for early stopping.
+            if early_stopping:
+                if np.argmin(validation_losses) <= epoch - 5:
+                    print(f"\nEarly stopping on epoch {epoch}!")
+                    test_loss, test_acc = self.eval_model()
+                    print(f"\nFinal loss: {test_loss}")
+                    print("\nDone!")
 
-        print(f"\nEpoch: {str(epoch + 1).zfill(len(str(epochs)))} (lr={lr:.6f} || "
-              f"Validation loss: {validation_loss:.4f} || "
-              f"Training loss: {train_loss:.4f}")
+                    return (np.mean(np.array(train_losses)).item(),
+                            np.mean(np.array(train_accuracies)).item(),
+                            np.mean(np.array(validation_losses)).item(),
+                            np.mean(np.array(validation_accuracies)).item(),
+                            test_loss,
+                            test_acc)
 
-        # Check for early stopping.
-        if early_stopping:
-            if np.argmin(validation_losses) <= epoch - 5:
-                print(f"\nEarly stopping on epoch {epoch}!")
-                test_loss = eval_model(model, test_loader, loss_function)
-                print(f"\nFinal loss: {test_loss}")
-                print("\nDone!")
-
-                return np.mean(np.array(train_losses)).item(), np.mean(np.array(validation_losses)).item(), test_loss
-
-        # Either save the best model or adapt the learning rate if necessary.
-        if adapt_lr_factor is not None:
-            if not best_loss or validation_loss < best_loss:
-                best_loss = validation_loss
-                torch.save(model, os.path.join(target_directory, "best_model.pt"))
+            # Either save the best model or adapt the learning rate if necessary.
+            if not best_loss or val_loss < best_loss:
+                best_loss = val_loss
+                torch.save({"epoch": epoch,
+                            "model_dict": self.model.state_dict(),
+                            "optimizer_dict": self.optimizer.state_dict(),
+                            "best_val_loss": best_loss}, os.path.join(target_directory, "best_model.pt"))
                 print("\nModel saved to best_model.pt")
             else:
-                lr /= adapt_lr_factor
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = lr
-                print(f"\nNew learning rate: {lr:.6f}")
+                if adapt_lr_factor is not None:
+                    self._lr /= adapt_lr_factor
+                    for param_group in self.optimizer.param_groups:
+                        param_group["lr"] = self._lr
+                    print(f"\nNew learning rate: {self._lr:.6f}")
 
-        print("\n" + 100 * "=")
+            print("\n" + 100 * "=")
 
-    test_loss = eval_model(model, test_loader, loss_function, save_predictions=True)
+        test_loss, test_acc = self.eval_model(save_predictions=True)
 
-    print(f"\nFinal loss: {test_loss}")
-    print("\nDone!")
+        # Necessary to work with model in jupyter notebook after training is done.
+        wb.unwatch(self.model)
 
-    return np.mean(np.array(train_losses)).item(), np.mean(np.array(validation_losses)).item(), test_loss
+        print(f"\nFinal loss: {test_loss}")
+        print("\nDone!")
 
+        return (np.mean(np.array(train_losses)).item(),
+                np.mean(np.array(train_accuracies)).item(),
+                np.mean(np.array(validation_losses)).item(),
+                np.mean(np.array(validation_accuracies)).item(),
+                test_loss,
+                test_acc)
 
-def eval_model(
-        model: nn.Module,
-        test_loader: DataLoader,
-        loss_function: nn.Module,
+    def eval_model(self, save_predictions: bool = False) -> tuple[float, float]:
+        """Evaluates a given model on test data.
+
+        Parameters
+        ----------
         save_predictions: bool = False
-) -> float:
-    """Evaluates a given model on test data.
+            Bool used to decide whether to log the model predictions or not.
 
-    Parameters
-    ----------
-    model: nn.Module
-        Model used for evaluation.
-    test_loader: DataLoader
-        Data used for testing the model.
-    loss_function: nn.Module
-        Loss function used to determine the "goodness" of the model.
-    save_predictions: bool = False
-        Bool used to decide whether to return the model predictions or not.
+        Returns
+        -------
+        float, float
+            Returns the specified average loss and accuracy.
+        """
 
-    Returns
-    -------
-    float
-        Returns the specified loss.
-    """
+        # Turn on evaluation mode for the model.
+        self.model.eval()
 
-    target_device = get_target_device()
+        total_loss = []
+        total_acc = []
+        test_table = wb.Table(columns=["target", "prediction"]) if save_predictions else None
 
-    # Turn on evaluation mode for the model.
-    model.eval()
+        # Compute the loss with torch.no_grad() as gradients aren't used.
+        with torch.no_grad():
+            for _, data, target in tqdm(self.test_loader, desc="Evaluating model on val/test set"):
+                data, target = data.float().to(self._device), target.float().to(self._device)
 
-    total_loss = []
-    predictions = []
+                output, loss, acc = self.compute_loss_acc(data, target)
 
-    # Compute the loss with torch.no_grad() as gradients aren't used.
-    with torch.no_grad():
-        for data, target in test_loader:
+                # Log batch loss and accuracy as well as predictions.
+                if save_predictions:
+                    self.log_pred_target(test_table, output, target)
 
-            data, target = data.float().to(target_device), target.long().to(target_device)
+                    wb.log({"test/batch loss": loss.item(), "test/batch accuracy": acc.item(),
+                            "test/step": self._global_test_step})
+                    wb.log({"test/predictions": test_table})
+                    self._global_test_step += 1
+                else:
+                    wb.log({"val/batch loss": loss.item(), "val/batch accuracy": acc.item(),
+                            "val/step": self._global_val_step})
+                    self._global_val_step += 1
 
-            outputs = model(data)
-            predictions.append(outputs)
+                # Compute total loss.
+                total_loss.append(loss.item())
+                # Compute the total accuracy.
+                total_acc.append(acc.item())
 
-            # Compute the loss.
-            loss = loss_function(outputs, target)
+        return np.mean(np.array(total_loss)).item(), np.mean(np.array(total_acc)).item()
 
-            # log batch loss
-            wb.log({"val/test batch loss": loss.item()})
+    def train_model(self) -> tuple[float, float]:
+        """Trains a given model on the training data.
 
-            # Compute total loss.
+        Returns
+        -------
+        float, float
+            The specified average loss and accuracy.
+        """
+
+        # Put the model into train mode and enable gradients computation.
+        self.model.train()
+        torch.enable_grad()
+
+        total_loss = []
+        total_acc = []
+
+        lr = Trainer.get_lr(self.optimizer)
+
+        for _, data, target in tqdm(self.train_loader, desc=f"Training epoch {self._current_epoch + 1} ({lr=:.6f})"):
+            data, target = data.float().to(self._device), target.float().to(self._device)
+
+            output, loss, acc = self.compute_loss_acc(data, target)
+            # Compute the gradients.
+            loss.backward()
+            # Perform the update.
+            self.optimizer.step()
+            # Reset the accumulated gradients.
+            self.optimizer.zero_grad()
+            # Log batch loss and accuracy.
+            wb.log({"train/batch loss": loss.item(), "train/batch accuracy": acc.item(),
+                    "train/step": self._global_train_step})
+            self._global_train_step += 1
+            # Compute the total loss.
             total_loss.append(loss.item())
+            # Compute the total accuracy.
+            total_acc.append(acc.item())
 
-        # Save predictions if save predictions.
-        if save_predictions:
-            wb.log({"predictions": predictions})
+        self._current_epoch += 1
 
-    return np.mean(np.array(total_loss)).item()
+        return np.mean(np.array(total_loss)).item(), np.mean(np.array(total_acc)).item()
 
+    @abstractmethod
+    def compute_loss_acc(
+            self,
+            data: torch.Tensor,
+            target: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Computes the loss and accuracy from the given data and target.
 
-def train_model(
-        model: nn.Module,
-        optimizer: Optimizer,
-        training_loader: DataLoader,
-        loss_function: nn.Module,
-        epoch: int
-) -> float:
-    """Trains a given model on the training data.
+        Parameters
+        ----------
+        data : torch.Tensor
+            Data used to calculate the model output and compute the loss as well as the accuracy.
+        target: torch.Tensor
+            Target used to compute the loss as well as the accuracy.
 
-    Parameters
-    ----------
-    model: ImagePixelPredictor
-        Model to be trained.
-    optimizer: Optimizer
-        Specified optimizer to be used to optimize the model.
-    training_loader: DataLoader
-        Data used for training the model.
-    loss_function: nn.Module
-        Loss function used to compute the loss between the output of the model and the given target.
-    epoch: int
-        Number of iteration.
+        Returns
+        -------
+        torch.Tensor, torch.Tensor, torch.Tensor
+            The model output as well as the loss and accuracy for the respective data and target.
+        """
+        pass
 
-    Returns
-    -------
-    float
-        Returns the specified loss.
-    """
+    @abstractmethod
+    def log_pred_target(self, test_table: wb.Table, output: torch.Tensor, target: torch.Tensor):
+        """Log the predictions and the respective target to the test table."""
+        pass
 
-    target_device = get_target_device()
+    @staticmethod
+    def set_random_seed(seed: int | None = 42) -> int:
+        """Decide if behaviour is random or set by a seed."""
+        if seed is None:
+            seed = time.time_ns() % (2 ** 32)
 
-    # Put the model into train mode and enable gradients computation.
-    model.train()
-    torch.enable_grad()
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        # When running on the CuDNN backend, two further options must be set
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        # Set a fixed value for the hash seed
+        os.environ["PYTHONHASHSEED"] = str(seed)
+        print(f"Random seed set as {seed}")
 
-    total_loss = []
+        return seed
 
-    lr = get_lr(optimizer)
+    @staticmethod
+    def get_lr(optimizer):
+        """Get the learning rate used for optimizing."""
+        for param_group in optimizer.param_groups:
+            return param_group['lr']
 
-    for data, target in tqdm(training_loader, desc=f"Training epoch {epoch + 1} ({lr = :.6f})"):
-        data, target = data.float().to(target_device), target.long().to(target_device)
-
-        outputs = model(data)
-
-        # Compute loss.
-        loss = loss_function(outputs, target)
-
-        # Compute the gradients.
-        loss.backward()
-
-        # Perform the update.
-        optimizer.step()
-
-        # Reset the accumulated gradients.
-        optimizer.zero_grad()
-
-        # log batch loss
-        wb.log({"train batch loss": loss.item()})
-
-        # Compute the total loss.
-        total_loss.append(loss.item())
-
-    return np.mean(np.array(total_loss)).item()
-
-
-def get_lr(optimizer):
-    """Get the learning rate used for optimizing."""
-    for param_group in optimizer.param_groups:
-        return param_group['lr']
-
-
-def get_target_device():
-    """Get the target device where training takes place."""
-    return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    @staticmethod
+    def get_target_device():
+        """Get the target device where training takes place."""
+        return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

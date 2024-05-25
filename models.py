@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from training import get_target_device
+from training import Trainer
 
 
 class SimpleFNN(nn.Module):
@@ -86,7 +86,7 @@ class SimpleRNN(nn.Module):
     ):
         super().__init__()
 
-        self.device = get_target_device()
+        self.device = Trainer.get_target_device()
         self.n_hidden_units = n_hidden_units
         self.n_layers = n_layers
 
@@ -116,7 +116,7 @@ class SimpleLSTM(nn.Module):
     ):
         super().__init__()
 
-        self.device = get_target_device()
+        self.device = Trainer.get_target_device()
         self.n_hidden_units = n_hidden_units
         self.n_layers = n_layers
 
