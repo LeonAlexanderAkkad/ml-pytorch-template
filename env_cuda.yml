@@ -12,3 +12,5 @@ dependencies:
   - dill
   - tqdm
   - scikit-learn
+  - pip:
+    - wandb
