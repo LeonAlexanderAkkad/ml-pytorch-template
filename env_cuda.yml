@@ -1,0 +1,14 @@
+name: ml_template
+channels:
+  - defaults
+  - pytorch
+  - nvidia
+dependencies:
+  - jupyter
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchaudio
+  - torchvision
+  - dill
+  - tqdm
+  - scikit-learn

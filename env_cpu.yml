@@ -1,11 +1,13 @@
 name: ml_template
 channels:
   - defaults
+  - pytorch
 dependencies:
   - jupyter
   - pytorch
-  - pytorch-cuda=12.1
+  - cpuonly
   - torchaudio
   - torchvision
   - dill
   - tqdm
+  - scikit-learn
