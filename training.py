@@ -62,7 +62,7 @@ class Trainer(ABC):
 
     def optimizing_predictor(
             self,
-            target_directory: str,
+            out_path: str,
             adapt_lr_factor: Optional[float] = None,
             early_stopping: bool = False
     ) -> Tuple[float, float, float, float, float, float]:
@@ -75,8 +75,8 @@ class Trainer(ABC):
 
         Parameters
         ----------
-        target_directory: str
-            Path to the directory where the results and best model should be stored.
+        out_path: str
+            Path to the file where the results and best model should be stored.
         adapt_lr_factor: float = None
             Factor used to adapt the learning rate if the model starts to over-fit on the training data.
         early_stopping: bool = False
@@ -107,8 +107,12 @@ class Trainer(ABC):
             validation_accuracies.append(val_acc)
 
             wb.log(
-                {"train/loss": train_loss, "train/accuracy": train_acc, "val/loss": val_loss, "val/accuracy": val_acc,
-                 "epoch": epoch})
+                {"train/loss": train_loss,
+                 "train/accuracy": train_acc,
+                 "val/loss": val_loss,
+                 "val/accuracy": val_acc,
+                 "epoch": epoch}
+            )
 
             print(f"\nEpoch: {str(epoch + 1).zfill(len(str(self.epochs)))} (lr={self._lr:.6f}) || "
                   f"Validation loss: {val_loss:.4f} || "
@@ -137,8 +141,8 @@ class Trainer(ABC):
                 torch.save({"epoch": epoch,
                             "model_dict": self.model.state_dict(),
                             "optimizer_dict": self.optimizer.state_dict(),
-                            "best_val_loss": best_loss}, os.path.join(target_directory, "best_model.pt"))
-                print("\nModel saved to best_model.pt")
+                            "best_val_loss": best_loss}, out_path)
+                print(f"\nModel saved to {out_path}")
             else:
                 if adapt_lr_factor is not None:
                     self._lr /= adapt_lr_factor
@@ -182,22 +186,20 @@ class Trainer(ABC):
 
         total_loss = []
         total_acc = []
-        test_table = wb.Table(columns=["target", "prediction"]) if save_predictions else None
+        test_table = self.create_table() if save_predictions else None
 
         # Compute the loss with torch.no_grad() as gradients aren't used.
         with torch.no_grad():
-            for _, data, target in tqdm(self.test_loader, desc="Evaluating model on val/test set"):
+            for idx, data, target in tqdm(self.test_loader, desc="Evaluating model on val/test set"):
                 data, target = data.float().to(self._device), target.float().to(self._device)
 
                 output, loss, acc = self.compute_loss_acc(data, target)
 
                 # Log batch loss and accuracy as well as predictions.
                 if save_predictions:
-                    self.log_pred_target(test_table, output, target)
-
+                    self.log_pred_target(test_table, idx, output, target)
                     wb.log({"test/batch loss": loss.item(), "test/batch accuracy": acc.item(),
                             "test/step": self._global_test_step})
-                    wb.log({"test/predictions": test_table})
                     self._global_test_step += 1
                 else:
                     wb.log({"val/batch loss": loss.item(), "val/batch accuracy": acc.item(),
@@ -208,6 +210,10 @@ class Trainer(ABC):
                 total_loss.append(loss.item())
                 # Compute the total accuracy.
                 total_acc.append(acc.item())
+
+            # log final table
+            if save_predictions:
+                wb.log({"test/predictions": test_table})
 
         return np.mean(np.array(total_loss)).item(), np.mean(np.array(total_acc)).item()
 
@@ -275,8 +281,13 @@ class Trainer(ABC):
         pass
 
     @abstractmethod
-    def log_pred_target(self, test_table: wb.Table, output: torch.Tensor, target: torch.Tensor):
+    def log_pred_target(self, test_table: wb.Table, idx: torch.Tensor, output: torch.Tensor, target: torch.Tensor):
         """Log the predictions and the respective target to the test table."""
+        pass
+
+    @abstractmethod
+    def create_table(self) -> wb.Table:
+        """Creates a table to log predictions"""
         pass
 
     @staticmethod
